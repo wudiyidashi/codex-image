@@ -87,10 +87,32 @@ class SizeNormalizationTests(unittest.TestCase):
         self.assertIn("aspect ratio", prompt)
 
     def test_explicit_non_standard_size_is_sent_as_requested(self):
-        api_size, _ = codex_image.normalize_image_size("1000x1800")
+        api_size, _ = codex_image.normalize_image_size("1024x1792")
 
-        self.assertEqual(api_size, "1000x1800")
-        self.assertEqual(codex_image.requested_delivery_size("1000x1800", api_size), "1000x1800")
+        self.assertEqual(api_size, "1024x1792")
+        self.assertEqual(codex_image.requested_delivery_size("1024x1792", api_size), "1024x1792")
+
+    def _assert_size_rejected(self, raw: str, expected_fragment: str):
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            with self.assertRaises(SystemExit):
+                codex_image.normalize_image_size(raw)
+        self.assertIn(expected_fragment, buf.getvalue())
+
+    def test_invalid_explicit_size_not_divisible_by_16_is_rejected(self):
+        self._assert_size_rejected("554x307", "divisible by 16")
+
+    def test_invalid_explicit_size_below_pixel_budget_is_rejected(self):
+        self._assert_size_rejected("560x304", "at least")
+
+    def test_invalid_explicit_size_exceeding_max_edge_is_rejected(self):
+        self._assert_size_rejected("4000x2000", "3840")
+
+    def test_invalid_explicit_size_exceeding_ratio_is_rejected(self):
+        self._assert_size_rejected("3008x496", "ratio")
 
     def test_ratio_tier_delivery_size_is_resolved_standard_size(self):
         api_size, _ = codex_image.normalize_image_size("9:16@1k")

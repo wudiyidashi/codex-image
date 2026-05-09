@@ -254,6 +254,9 @@ def normalize_image_size(spec: str) -> tuple[str, str | None]:
     if dim_match:
         width = int(dim_match.group(1))
         height = int(dim_match.group(2))
+        err = validate_image_size(width, height)
+        if err is not None:
+            fail(f"invalid image size {raw_spec}: {err}")
         return f"{width}x{height}", None
 
     ratio_match = SIZE_RATIO_PATTERN.match(raw_spec)
