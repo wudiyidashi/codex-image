@@ -223,6 +223,57 @@ def choose_candidate(
     )
 
 
+def recommend_api_size_for_input(width: int, height: int) -> tuple[int, int]:
+    """Pick the smallest valid (W,H) close to the input's aspect ratio.
+
+    Used by `inspect` and by `edit`'s auto-size fallback so the API call
+    returns the correct ratio and the post-resize back to the input size
+    is a clean down-sample.
+
+    Falls back to an approximate-ratio search when the input has an
+    awkward exact ratio (e.g. 554:308) that produces no exact-ratio
+    candidates inside the gpt-image-2 size budget.
+    """
+    if width <= 0 or height <= 0:
+        fail(f"invalid input dimensions: {width}x{height}")
+
+    target_ratio = width / height
+    if max(target_ratio, 1 / target_ratio) > IMAGE_MAX_RATIO:
+        fail(
+            f"input {width}x{height} aspect ratio "
+            f"({max(target_ratio, 1/target_ratio):.3f}:1) exceeds gpt-image-2's 3:1 limit"
+        )
+
+    ratio = Fraction(width, height).limit_denominator(256)
+    candidates: list[tuple[int, int]] = list(
+        iter_ratio_candidates(ratio.numerator, ratio.denominator)
+    )
+
+    if not candidates:
+        for w in range(IMAGE_SIZE_STEP, IMAGE_MAX_EDGE + 1, IMAGE_SIZE_STEP):
+            ideal_h = w / target_ratio
+            for h_candidate in (
+                int(ideal_h // IMAGE_SIZE_STEP) * IMAGE_SIZE_STEP,
+                (int(ideal_h // IMAGE_SIZE_STEP) + 1) * IMAGE_SIZE_STEP,
+            ):
+                if h_candidate <= 0 or h_candidate > IMAGE_MAX_EDGE:
+                    continue
+                if validate_image_size(w, h_candidate) is not None:
+                    continue
+                actual = w / h_candidate
+                if abs(actual - target_ratio) / target_ratio > OUTPUT_RESIZE_MAX_RATIO_DELTA:
+                    continue
+                candidates.append((w, h_candidate))
+
+    if not candidates:
+        fail(
+            f"could not find a valid API size near input {width}x{height} ratio "
+            f"{target_ratio:.3f} within gpt-image-2 constraints"
+        )
+
+    return min(candidates, key=lambda c: (c[0] * c[1], abs(c[0] / c[1] - target_ratio)))
+
+
 def normalize_image_size(spec: str) -> tuple[str, str | None]:
     raw_spec = spec.strip()
     if raw_spec.lower() == "auto":
@@ -1198,36 +1249,62 @@ def parse_direct_size(size: str | None) -> tuple[int, int] | None:
     return int(dim_match.group(1)), int(dim_match.group(2))
 
 
-def read_image_dimensions(path: Path) -> tuple[int, int] | None:
-    if shutil.which("sips") is None:
-        return None
-    result = subprocess.run(
-        ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
+def _try_pillow():
+    try:
+        from PIL import Image  # noqa: PLC0415
+        return Image
+    except ImportError:
         return None
 
-    width = None
-    height = None
-    for line in result.stdout.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("pixelWidth:"):
-            width = int(stripped.split(":", 1)[1].strip())
-        elif stripped.startswith("pixelHeight:"):
-            height = int(stripped.split(":", 1)[1].strip())
-    if width is None or height is None:
-        return None
-    return width, height
+
+def read_image_dimensions(path: Path) -> tuple[int, int] | None:
+    Image = _try_pillow()
+    if Image is not None:
+        try:
+            with Image.open(path) as img:
+                return img.size
+        except Exception:
+            return None
+
+    if shutil.which("sips") is not None:
+        result = subprocess.run(
+            ["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode == 0:
+            width = None
+            height = None
+            for line in result.stdout.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("pixelWidth:"):
+                    width = int(stripped.split(":", 1)[1].strip())
+                elif stripped.startswith("pixelHeight:"):
+                    height = int(stripped.split(":", 1)[1].strip())
+            if width is not None and height is not None:
+                return width, height
+    return None
 
 
 def resize_image_to_size(path: Path, width: int, height: int) -> None:
+    Image = _try_pillow()
+    if Image is not None:
+        try:
+            with Image.open(path) as img:
+                resized = img.resize((width, height), Image.LANCZOS)
+                params = {}
+                if path.suffix.lower() in (".jpg", ".jpeg"):
+                    params["quality"] = 95
+                resized.save(path, **params)
+            return
+        except Exception as exc:
+            fail(f"failed to resize generated image {path} via Pillow: {exc}")
+
     if shutil.which("sips") is None:
         fail(
-            f"generated image {path} does not match requested size and local sips is unavailable "
-            "for post-processing"
+            f"generated image {path} does not match requested size and neither Pillow nor "
+            "local sips is available for post-processing. Install pillow: pip install pillow"
         )
     result = subprocess.run(
         ["sips", "-z", str(height), str(width), str(path)],
@@ -1657,7 +1734,22 @@ def resolve_edit_inputs(
 
     paths = dedupe_paths(selected_paths)
     if not paths and not allow_empty_images:
-        fail("at least one input image is required")
+        hint = ""
+        if prompt_arg and not Path(prompt_arg).expanduser().is_file():
+            hint = (
+                f"\nGot a single positional argument that does not look like an image "
+                f"path: {prompt_arg!r}. If this was meant as the prompt, pass it via "
+                f"--prompt and add --image PATH for the input image."
+            )
+        fail(
+            "at least one input image is required for edit.\n"
+            "Use one of these forms:\n"
+            "  codex-image edit --image PATH --prompt \"...\"\n"
+            "  codex-image edit --image PATH \"prompt text\"\n"
+            "  codex-image edit PATH \"prompt text\"   (legacy positional)\n"
+            "Codex thread placeholders ([Image #N], [Last Output], --image-set ...) also count as images."
+            + hint
+        )
     if len(paths) > IMAGE_MAX_EDIT_IMAGES:
         fail(f"at most {IMAGE_MAX_EDIT_IMAGES} input images are supported for edit")
     return paths, read_prompt(prompt_arg, args.prompt_file, prompt_flag=args.prompt_flag)
@@ -1891,10 +1983,24 @@ def cmd_edit(args: argparse.Namespace) -> int:
     )
     input_paths, prompt = resolve_edit_inputs(args, allow_empty_images=allow_empty_images)
 
+    auto_delivery_size: str | None = None
+    if args.size is None and not allow_empty_images and len(input_paths) == 1:
+        dims = read_image_dimensions(input_paths[0])
+        if dims is not None and validate_image_size(*dims) is not None:
+            rec_w, rec_h = recommend_api_size_for_input(dims[0], dims[1])
+            args.size = f"{rec_w}x{rec_h}"
+            auto_delivery_size = f"{dims[0]}x{dims[1]}"
+            log(
+                f"auto-size: input {dims[0]}x{dims[1]} -> "
+                f"API {args.size}, post-resize delivery {auto_delivery_size}"
+            )
+
     mask_path = resolve_image_reference(args.mask) if args.mask else None
 
     model = effective_model(args.model, runtime)
     size, delivery_size, quality, fmt, compression, background, moderation, size_note = common_runtime_values(args, runtime)
+    if auto_delivery_size is not None:
+        delivery_size = auto_delivery_size
     validate_input_fidelity(args.input_fidelity)
     n = args.n
     validate_n(n)
@@ -2225,6 +2331,52 @@ def cmd_generate_batch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inspect(args: argparse.Namespace) -> int:
+    path = Path(args.image).expanduser()
+    if not path.is_file():
+        fail(f"input not found: {path}")
+
+    dims = read_image_dimensions(path)
+    if dims is None:
+        fail(
+            f"could not read dimensions for {path}. Install Pillow "
+            "(pip install pillow) or run on a system with sips available."
+        )
+    width, height = dims
+    rec_w, rec_h = recommend_api_size_for_input(width, height)
+    api_size = f"{rec_w}x{rec_h}"
+    delivery_size = f"{width}x{height}"
+
+    payload = {
+        "input": delivery_size,
+        "input_width": width,
+        "input_height": height,
+        "input_aspect_ratio": round(width / height, 6),
+        "recommended_api_size": api_size,
+        "recommended_delivery_size": delivery_size,
+        "edit_command_template": (
+            f"codex-image edit --image {path} --prompt \"...\" "
+            f"--size {api_size} --out OUT.png"
+        ),
+        "notes": (
+            "Pass --size {api_size} so the API call matches the input ratio; "
+            "the CLI will resize the result to {delivery_size} after generation."
+        ).format(api_size=api_size, delivery_size=delivery_size),
+    }
+
+    if args.as_json:
+        print(json.dumps(payload, ensure_ascii=False))
+        return 0
+
+    print(f"input:                 {delivery_size}")
+    print(f"input ratio:           {payload['input_aspect_ratio']}")
+    print(f"recommended API size:  {api_size}")
+    print(f"recommended delivery:  {delivery_size}")
+    print(f"edit command template: {payload['edit_command_template']}")
+    print(f"note: {payload['notes']}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate or edit images through an OpenAI-compatible Images API endpoint.",
@@ -2326,6 +2478,20 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--concurrency", type=int, default=DEFAULT_BATCH_CONCURRENCY, help="number of concurrent requests")
     batch.add_argument("--fail-fast", action="store_true", help="stop after the first failed job")
     batch.set_defaults(func=cmd_generate_batch)
+
+    inspect = sub.add_parser(
+        "inspect",
+        help="inspect a local image and recommend API + delivery sizes for an edit call",
+        prog="codex-image inspect",
+    )
+    inspect.add_argument("image", help="path to a local image file")
+    inspect.add_argument(
+        "--json",
+        dest="as_json",
+        action="store_true",
+        help="emit a single-line JSON object instead of human-readable text",
+    )
+    inspect.set_defaults(func=cmd_inspect)
 
     return parser
 

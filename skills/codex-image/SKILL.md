@@ -19,6 +19,8 @@ Local saved-file raster image workflow backed by `scripts/codex_image.py`, shell
 - `OPENAI_BASE_URL` or provider `base_url` must exist in API-key mode.
 - Never silently downgrade the model or transport. Switching from `gpt-image-2` to `gpt-image-1.5`, from Images API to Responses, or disabling `input_fidelity` requires explicit user confirmation unless the user already named the target model/transport in the current request.
 - Always close out a task by reporting three things: the final saved path(s), the final prompt or prompt set, and the mode used (`generate` / `edit` / `generate-batch` plus the transport).
+- Pass non-ASCII / multi-line / quoted prompts directly via `--prompt "..."`. Windows argv is Unicode-safe (CreateProcessW / GetCommandLineW), so preemptively writing the prompt to a temp file is unnecessary. Use `--prompt-file` only after a real argv encoding failure has actually occurred.
+- Do not silently set `--input-fidelity` for `gpt-image-2`; it is a no-op there. Only pass `--input-fidelity` when the active model is `gpt-image-1.5` or another model that documents the field, and only with explicit user agreement (because routing to `gpt-image-1.5` is a model downgrade per the rule above).
 
 ## When to use
 
@@ -131,6 +133,7 @@ Default to `generate` unless the request clearly asks to change an existing imag
 ## Workflow
 
 1. Decide `generate`, `edit`, or `generate-batch`.
+1a. **Edit pre-step (mandatory)**: before any `edit` call, learn the input image's dimensions. Either run `codex-image inspect INPUT.png` once and use its `recommended_api_size` / `recommended_delivery_size`, **or** rely on the CLI's auto-size: when `edit` is called with one `--image` and **no** `--size`, the CLI reads the input dims, picks the smallest valid `--size` with the same aspect ratio, and post-resizes the result back to the input dims. Either way, do not let the API default kick in — the default 1536x1024 will not match arbitrary input ratios and forces a regeneration.
 2. Collect prompt, exact text, constraints, output target, and any input images.
 3. If the user mainly wants the normal native image conversation path and does not need saved-file, exact output path, explicit placeholder references, or API/CLI control, do not use this skill; let built-in `imagegen` handle it.
 4. Keep the default transport on the Images API. Reach for `--transport responses` only when explicit prior-response image state is part of the task.

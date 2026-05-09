@@ -1,6 +1,9 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 
+if "%PYTHONUTF8%"=="" set "PYTHONUTF8=1"
+if "%PYTHONIOENCODING%"=="" set "PYTHONIOENCODING=utf-8"
+
 set "SCRIPT_DIR=%~dp0"
 
 if not "%CODEX_IMAGE_PYTHON%"=="" goto run_override
