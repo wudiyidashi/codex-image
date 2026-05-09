@@ -59,6 +59,7 @@ Local saved-file raster image workflow backed by `scripts/codex_image.py`, shell
 - Harmless placeholder variants such as `[Image#1]` and `[image # 1]` are normalized automatically.
 - If `generate` is called with `--image`, the CLI emits a warning and reroutes it to `edit`.
 - For `edit`, list invariants explicitly in the prompt (`change only X; keep Y unchanged`) and repeat them on every iteration. Do not rely on implicit memory across calls.
+- For multi-image inputs, label every image's role in the prompt: `reference image`, `edit target`, or `supporting insert/style/compositing input`. Placeholders such as `[Image #N]` resolve *which* file; the role label resolves *what to do with it*.
 - Iterate one change at a time. After each call, re-validate the result, then ship the next single change in a new call. Bundling multiple unrelated changes in one prompt makes drift hard to localize.
 
 ## Output rules
@@ -141,8 +142,8 @@ Default to `generate` unless the request clearly asks to change an existing imag
    - convert ratio forms such as `16:9` or `9:16@1k` into direct API sizes
    - preserve the requested final delivery size as the post-save target
 7. Run the bundled launcher.
-8. Validate subject, composition, text, and invariants.
-9. Report the final saved path.
+8. Validate four things on every output: subject, style/composition, text accuracy (when text is present), and invariants/avoid items (especially for edits).
+9. Report the close-out triple: final saved path(s), final prompt or prompt set, and the mode used (`generate` / `edit` / `generate-batch` plus the transport).
 
 ## Size and post-processing policy
 

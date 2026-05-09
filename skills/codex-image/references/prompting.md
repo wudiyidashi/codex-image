@@ -10,6 +10,41 @@ This file is about prompt structure and iteration. API controls such as `quality
 - For complex requests, use short labeled lines instead of one long paragraph.
 - Include intended use when it affects polish or composition, such as wallpaper, poster, hero image, sticker, infographic, or UI mockup.
 
+## Use-case taxonomy
+
+Classify each request into exactly one slug and keep that slug consistent across the prompt scaffolding (`Use case:`) and any iteration follow-ups.
+
+**Generate**
+
+- `photorealistic-natural` — candid/editorial lifestyle scenes with real texture and natural lighting
+- `product-mockup` — product/packaging shots, catalog imagery, merch concepts
+- `ui-mockup` — app/web interface mockups and wireframes; specify the desired fidelity
+- `infographic-diagram` — diagrams/infographics with structured layout and text
+- `scientific-educational` — classroom explainers, scientific diagrams, learning visuals with required labels and accuracy constraints
+- `ads-marketing` — campaign concepts and ad creatives with audience, brand position, scene, and exact tagline/copy
+- `productivity-visual` — slide, chart, workflow, and data-heavy business visuals
+- `logo-brand` — logo/mark exploration; vector-friendly
+- `illustration-story` — comics, children's book art, narrative scenes
+- `stylized-concept` — style-driven concept art, 3D / stylized renders
+- `historical-scene` — period-accurate / world-knowledge scenes
+
+**Edit**
+
+- `text-localization` — translate / replace in-image text, preserve layout
+- `identity-preserve` — try-on, person-in-scene; lock face / body / pose
+- `precise-object-edit` — remove / replace a specific element (including interior swaps)
+- `lighting-weather` — time-of-day / season / atmosphere changes only
+- `background-extraction` — transparent background / clean cutout (use the chroma-key + `remove_chroma_key.py` workflow)
+- `style-transfer` — apply reference style while changing subject / scene
+- `compositing` — multi-image insert / merge with matched lighting and perspective
+- `sketch-to-render` — drawing / line art to photoreal render
+
+## Multi-image inputs
+
+- Reference each image by index in the prompt: `Image 1: edit target; Image 2: style reference; Image 3: compositing insert`.
+- Explicitly label every input's role. Use one of: `reference image`, `edit target`, `supporting insert/style/compositing input`. Placeholder syntax such as `[Image #N]` resolves *which* file; the role label resolves *what to do with it*.
+- For edits, list the invariants for the `edit target` separately from any guidance about the references.
+
 ## Specificity policy
 
 - If the user prompt is already detailed, normalize it into a cleaner spec.
