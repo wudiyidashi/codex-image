@@ -114,6 +114,44 @@ class SizeNormalizationTests(unittest.TestCase):
     def test_invalid_explicit_size_exceeding_ratio_is_rejected(self):
         self._assert_size_rejected("3008x496", "ratio")
 
+    def test_prose_with_slashes_is_not_treated_as_prompt_file(self):
+        for prompt in (
+            "Edit the photo and/or screenshot",
+            "Keep background/photo details intact",
+            "see https://example.com for the spec",
+            "use 5/10 stars rendering",
+        ):
+            self.assertFalse(
+                codex_image.looks_like_pathish_prompt(prompt),
+                f"unexpectedly classified as path: {prompt!r}",
+            )
+
+    def test_nonexistent_path_string_is_not_treated_as_prompt_file(self):
+        self.assertFalse(codex_image.looks_like_pathish_prompt("does-not-exist.txt"))
+        self.assertFalse(codex_image.looks_like_pathish_prompt("./nope.md"))
+        self.assertFalse(codex_image.looks_like_pathish_prompt("~/missing/prompt.txt"))
+
+    def test_existing_file_path_is_treated_as_prompt_file(self):
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
+            tmp.write(b"hello")
+            tmp_path = tmp.name
+        try:
+            self.assertTrue(codex_image.looks_like_pathish_prompt(tmp_path))
+        finally:
+            os.unlink(tmp_path)
+
+    def test_prompt_with_slashes_routes_through_normalize_legacy_unchanged(self):
+        argv = [
+            "edit",
+            "--image",
+            "C:/some/screenshot.png",
+            "--prompt",
+            "Keep background/photo details intact and do not crop",
+        ]
+        normalized = codex_image.normalize_legacy_cli_args(argv)
+        self.assertIn("--prompt", normalized)
+        self.assertNotIn("--prompt-file", normalized)
+
     def test_ratio_tier_delivery_size_is_resolved_standard_size(self):
         api_size, _ = codex_image.normalize_image_size("9:16@1k")
 

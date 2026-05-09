@@ -576,36 +576,28 @@ def read_prompt(
 
 
 def looks_like_pathish_prompt(value: str) -> bool:
+    """Return True only when the value plausibly is, and on disk really is, a file.
+
+    The earlier version treated any prompt containing `/` or `\\` as a path
+    (so "and/or", "background/photo", URLs, etc. got rerouted to
+    --prompt-file and failed). Now the only signal that wins is "this is an
+    existing file on disk". Cheap pre-filters reject obvious prose.
+    """
     candidate = value.strip()
     if not candidate:
         return False
-    has_path_separators = any(sep in candidate for sep in (os.sep, "/", "\\"))
-    has_path_prefix = candidate.startswith(("~", "."))
-    path = Path(candidate).expanduser()
-    suffix = path.suffix.lower()
-    has_path_suffix = suffix in {".txt", ".md", ".prompt"}
-    should_probe_filesystem = (
-        len(candidate) < 240
-        and "\n" not in candidate
-        and not candidate.endswith(".")
-        and (
-            has_path_separators
-            or has_path_prefix
-            or has_path_suffix
-            or (" " not in candidate and "\t" not in candidate)
-        )
-    )
-    if should_probe_filesystem:
-        try:
-            if path.is_file():
-                return True
-        except OSError:
-            return False
-    if has_path_separators:
-        return True
-    if has_path_prefix:
-        return True
-    return has_path_suffix
+    if "\n" in candidate or "\r" in candidate:
+        return False
+    if len(candidate) >= 240:
+        return False
+    if " " in candidate or "\t" in candidate:
+        return False
+    if candidate.endswith("."):
+        return False
+    try:
+        return Path(candidate).expanduser().is_file()
+    except (OSError, ValueError):
+        return False
 
 
 def normalize_legacy_cli_args(argv: list[str]) -> list[str]:
