@@ -17,6 +17,8 @@ Local saved-file raster image workflow backed by `scripts/codex_image.py`, shell
 - When a launcher call fails with a deterministic local parse or input-shape error and the safe retry is obvious, retry once immediately in the same turn before sending commentary.
 - Do not fall back to SVG, Pillow sketches, screenshots, or one-off scripts unless the user explicitly wants code-native graphics.
 - `OPENAI_BASE_URL` or provider `base_url` must exist in API-key mode.
+- Never silently downgrade the model or transport. Switching from `gpt-image-2` to `gpt-image-1.5`, from Images API to Responses, or disabling `input_fidelity` requires explicit user confirmation unless the user already named the target model/transport in the current request.
+- Always close out a task by reporting three things: the final saved path(s), the final prompt or prompt set, and the mode used (`generate` / `edit` / `generate-batch` plus the transport).
 
 ## When to use
 
@@ -68,6 +70,34 @@ Local saved-file raster image workflow backed by `scripts/codex_image.py`, shell
 - For project-bound assets, save or move the final image into the workspace before finishing.
 - Keep edits non-destructive by default unless the user explicitly asked to overwrite.
 - Successful `responses` calls record the latest response ids under the thread output directory for follow-up reuse.
+
+## Transparent image requests
+
+codex-image is CLI-only and has no built-in `image_gen` to fall back on, so transparent backgrounds are produced in this order:
+
+1. **Default: chroma-key + local matte removal.**
+   - Generate the subject on a perfectly flat solid chroma-key background. Default key color is `#00ff00`; use `#ff00ff` for green-dominant subjects, and avoid `#0000ff` for blue subjects.
+   - Run the bundled `scripts/remove_chroma_key.py` helper on the saved file to convert the key color to alpha. Recommended flags: `--auto-key border --soft-matte --transparent-threshold 12 --opaque-threshold 220 --despill`.
+   - Validate the result has an alpha channel, transparent corners, and no key-color fringe.
+2. **Fallback: model-native transparent output.** Only use this after explicit user confirmation, because it requires switching to a model that supports `background=transparent` (for example `gpt-image-1.5`) — this is a model downgrade.
+
+Trigger the confirmation prompt when chroma-key removal is unlikely to produce a clean cutout: hair, fur, feathers, smoke, glass, liquids, translucent or reflective materials, soft cast shadows, or subjects whose colors conflict with every practical key color.
+
+Confirmation message template:
+
+```text
+This request likely needs native transparency. The default codex-image path uses a chroma-key background plus local matte removal; native transparency requires switching to a model that supports background=transparent (for example gpt-image-1.5), which is a model downgrade. Should I proceed?
+```
+
+Transparent prompt template:
+
+```text
+Create the requested subject on a perfectly flat solid #00ff00 chroma-key background for background removal.
+The background must be one uniform color with no shadows, gradients, texture, reflections, floor plane, or lighting variation.
+Keep the subject fully separated from the background with crisp edges and generous padding.
+Do not use #00ff00 anywhere in the subject.
+No cast shadow, no contact shadow, no reflection, no watermark, and no text unless explicitly requested.
+```
 
 ## Workflow
 

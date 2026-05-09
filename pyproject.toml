@@ -5,6 +5,9 @@ description = "Codex skill for OpenAI Images API generation and editing in API k
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+dependencies = [
+  "pillow>=10.0",
+]
 authors = [{ name = "IanShaw027" }]
 keywords = [
   "codex",
