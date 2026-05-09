@@ -171,6 +171,14 @@ Recommended sizes (pick from these whenever possible to avoid rejection):
 - `3840x2160` / `2160x3840` — 4K landscape / portrait
 - `auto`
 
+### Size and quality choice for `generate`
+
+- Square images are typically fastest. Default to `1024x1024` for fast square drafts.
+- For non-square defaults pick `1536x1024` (landscape) or `1024x1536` (portrait).
+- 2K (`2048x...`) and 4K (`3840x2160` / `2160x3840`) only when the user explicitly asks for that resolution.
+- Use `--quality low` for fast drafts, thumbnails, and quick iterations. Use `medium`, `high`, or `auto` for final assets, dense text, diagrams, identity-sensitive edits, or high-resolution outputs.
+- Do not pass `--input-fidelity` with `gpt-image-2`; the model always uses high fidelity for image inputs.
+
 ## Prompt guidance
 
 - Structure prompts as backdrop -> subject -> details -> constraints.
