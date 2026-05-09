@@ -548,12 +548,34 @@ def read_prompt(
     prompt_file: str | None,
     *,
     prompt_flag: str | None = None,
+    prompt_stdin: bool = False,
 ) -> str:
+    if prompt_stdin:
+        value = sys.stdin.read().strip()
+        if not value:
+            fail("--prompt-stdin set but stdin produced no prompt text")
+        if any(item for item in (prompt, prompt_file, prompt_flag)):
+            fail("--prompt-stdin cannot be combined with --prompt, --prompt-file, or a positional prompt")
+        return value
+
     supplied_prompt_count = sum(
         1 for item in (prompt, prompt_file, prompt_flag) if item
     )
     if supplied_prompt_count > 1:
-        fail("use only one of positional prompt, --prompt, or --prompt-file")
+        suffix = ""
+        if prompt and prompt_flag:
+            suffix = (
+                "\nLikely cause: the shell split the value of --prompt because the "
+                "prompt text contains an unescaped quote character (most often ASCII \" "
+                "or '). On Windows cmd.exe, %* re-tokenizes %args and treats every \" as "
+                "a quote boundary, so anything after the first inner \" leaks into a "
+                "positional argument. Workarounds, in order of preference:\n"
+                "  - pipe the prompt via --prompt-stdin (no shell quoting needed),\n"
+                "  - write the prompt to a file and pass --prompt-file PATH,\n"
+                "  - rephrase the prompt to use single quotes ' or Chinese curly "
+                "quotes “” instead of ASCII \"."
+            )
+        fail("use only one of positional prompt, --prompt, --prompt-file, or --prompt-stdin" + suffix)
     if prompt_file:
         path = Path(prompt_file).expanduser()
         if not path.is_file():
@@ -1871,7 +1893,12 @@ def resolve_edit_inputs(
         )
     if len(paths) > IMAGE_MAX_EDIT_IMAGES:
         fail(f"at most {IMAGE_MAX_EDIT_IMAGES} input images are supported for edit")
-    return paths, read_prompt(prompt_arg, args.prompt_file, prompt_flag=args.prompt_flag)
+    return paths, read_prompt(
+        prompt_arg,
+        args.prompt_file,
+        prompt_flag=args.prompt_flag,
+        prompt_stdin=getattr(args, "prompt_stdin", False),
+    )
 
 
 def normalize_job(job: Any, idx: int) -> dict[str, Any]:
@@ -1967,7 +1994,12 @@ def cmd_generate(args: argparse.Namespace) -> int:
         return cmd_edit(redirect_generate_args_to_edit(args))
     runtime = resolve_runtime()
     api_key = ensure_api_key(runtime)
-    prompt = read_prompt(args.prompt, args.prompt_file, prompt_flag=args.prompt_flag)
+    prompt = read_prompt(
+        args.prompt,
+        args.prompt_file,
+        prompt_flag=args.prompt_flag,
+        prompt_stdin=getattr(args, "prompt_stdin", False),
+    )
     model = effective_model(args.model, runtime)
     transport = effective_transport(getattr(args, "transport", None), runtime)
     size, delivery_size, quality, fmt, compression, background, moderation, size_note = common_runtime_values(args, runtime)
@@ -2517,6 +2549,12 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--moderation", choices=("auto", "low"), help="image moderation level")
     common.add_argument("--n", type=int, default=1, help="number of images to generate, 1-10")
     common.add_argument("--prompt-file", help="read prompt text from a file")
+    common.add_argument(
+        "--prompt-stdin",
+        dest="prompt_stdin",
+        action="store_true",
+        help="read prompt text from stdin; bypasses shell quoting (recommended for prompts with embedded quotes or many lines)",
+    )
     common.add_argument("--force", action="store_true", help="overwrite existing output files")
     common.add_argument("--dry-run", action="store_true", help="print the request payload without calling the API")
 

@@ -19,7 +19,8 @@ Local saved-file raster image workflow backed by `scripts/codex_image.py`, shell
 - `OPENAI_BASE_URL` or provider `base_url` must exist in API-key mode.
 - Never silently downgrade the model or transport. Switching from `gpt-image-2` to `gpt-image-1.5`, from Images API to Responses, or disabling `input_fidelity` requires explicit user confirmation unless the user already named the target model/transport in the current request.
 - Always close out a task by reporting three things: the final saved path(s), the final prompt or prompt set, and the mode used (`generate` / `edit` / `generate-batch` plus the transport).
-- Pass non-ASCII / multi-line / quoted prompts directly via `--prompt "..."`. Windows argv is Unicode-safe (CreateProcessW / GetCommandLineW), so preemptively writing the prompt to a temp file is unnecessary. Use `--prompt-file` only after a real argv encoding failure has actually occurred.
+- Pass non-ASCII prompts directly via `--prompt "..."`. Windows argv is Unicode-safe (CreateProcessW / GetCommandLineW), so writing a temp prompt file just to dodge encoding issues is unnecessary.
+- BUT: if the prompt text contains ASCII straight quotes `"` or `'`, **do not pass it via `--prompt`**. cmd.exe re-tokenizes `%*` and treats every inner `"` as a quote boundary, which splits the prompt and trips `use only one of positional prompt, --prompt, ...`. Use `--prompt-stdin` (pipe the prompt text into the launcher) or `--prompt-file PATH` for those prompts.
 - Do not silently set `--input-fidelity` for `gpt-image-2`; it is a no-op there. Only pass `--input-fidelity` when the active model is `gpt-image-1.5` or another model that documents the field, and only with explicit user agreement (because routing to `gpt-image-1.5` is a model downgrade per the rule above).
 
 ## When to use
