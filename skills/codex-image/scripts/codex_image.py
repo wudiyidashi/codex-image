@@ -1257,6 +1257,78 @@ def _try_pillow():
         return None
 
 
+def _read_dimensions_from_header(path: Path) -> tuple[int, int] | None:
+    """Stdlib-only image-header parser for PNG, JPEG, GIF, WebP, BMP.
+
+    Avoids the Pillow dependency for the common case of just needing
+    width/height. Returns None for unrecognized formats.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(32)
+            if len(head) < 16:
+                return None
+
+            if head.startswith(b"\x89PNG\r\n\x1a\n"):
+                width = int.from_bytes(head[16:20], "big")
+                height = int.from_bytes(head[20:24], "big")
+                return width, height
+
+            if head.startswith(b"GIF8"):
+                width = int.from_bytes(head[6:8], "little")
+                height = int.from_bytes(head[8:10], "little")
+                return width, height
+
+            if head[:2] == b"BM":
+                width = int.from_bytes(head[18:22], "little", signed=True)
+                height = int.from_bytes(head[22:26], "little", signed=True)
+                return width, abs(height)
+
+            if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+                chunk = head[12:16]
+                if chunk == b"VP8 ":
+                    width = int.from_bytes(head[26:28], "little") & 0x3FFF
+                    height = int.from_bytes(head[28:30], "little") & 0x3FFF
+                    return width, height
+                if chunk == b"VP8L":
+                    b0, b1, b2, b3 = head[21], head[22], head[23], head[24]
+                    width = 1 + ((b1 & 0x3F) << 8 | b0)
+                    height = 1 + ((b3 & 0x0F) << 10 | b2 << 2 | (b1 & 0xC0) >> 6)
+                    return width, height
+                if chunk == b"VP8X":
+                    width = 1 + int.from_bytes(head[24:27], "little")
+                    height = 1 + int.from_bytes(head[27:30], "little")
+                    return width, height
+
+            if head[:2] == b"\xff\xd8":
+                f.seek(2)
+                while True:
+                    marker = f.read(2)
+                    if len(marker) < 2 or marker[0] != 0xFF:
+                        return None
+                    code = marker[1]
+                    if 0xC0 <= code <= 0xCF and code not in (0xC4, 0xC8, 0xCC):
+                        f.read(3)  # length(2) + precision(1)
+                        h_bytes = f.read(2)
+                        w_bytes = f.read(2)
+                        if len(h_bytes) < 2 or len(w_bytes) < 2:
+                            return None
+                        return (
+                            int.from_bytes(w_bytes, "big"),
+                            int.from_bytes(h_bytes, "big"),
+                        )
+                    seg_len_bytes = f.read(2)
+                    if len(seg_len_bytes) < 2:
+                        return None
+                    seg_len = int.from_bytes(seg_len_bytes, "big")
+                    if seg_len < 2:
+                        return None
+                    f.seek(seg_len - 2, 1)
+    except OSError:
+        return None
+    return None
+
+
 def read_image_dimensions(path: Path) -> tuple[int, int] | None:
     Image = _try_pillow()
     if Image is not None:
@@ -1264,7 +1336,11 @@ def read_image_dimensions(path: Path) -> tuple[int, int] | None:
             with Image.open(path) as img:
                 return img.size
         except Exception:
-            return None
+            pass
+
+    dims = _read_dimensions_from_header(path)
+    if dims is not None:
+        return dims
 
     if shutil.which("sips") is not None:
         result = subprocess.run(
@@ -1287,6 +1363,51 @@ def read_image_dimensions(path: Path) -> tuple[int, int] | None:
     return None
 
 
+def _resize_via_powershell(path: Path, width: int, height: int) -> bool:
+    """Windows fallback: System.Drawing is built into the .NET runtime."""
+    if os.name != "nt":
+        return False
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        return False
+
+    fmt_map = {
+        ".png": "Png",
+        ".jpg": "Jpeg",
+        ".jpeg": "Jpeg",
+        ".webp": "Png",
+        ".bmp": "Bmp",
+        ".gif": "Gif",
+    }
+    fmt = fmt_map.get(path.suffix.lower(), "Png")
+    src = str(path).replace("'", "''")
+    script = (
+        "Add-Type -AssemblyName System.Drawing; "
+        f"$img = [System.Drawing.Image]::FromFile('{src}'); "
+        f"$bmp = New-Object System.Drawing.Bitmap {width}, {height}; "
+        "$g = [System.Drawing.Graphics]::FromImage($bmp); "
+        "$g.InterpolationMode = "
+        "[System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic; "
+        "$g.SmoothingMode = "
+        "[System.Drawing.Drawing2D.SmoothingMode]::HighQuality; "
+        "$g.PixelOffsetMode = "
+        "[System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality; "
+        "$g.CompositingQuality = "
+        "[System.Drawing.Drawing2D.CompositingQuality]::HighQuality; "
+        f"$g.DrawImage($img, 0, 0, {width}, {height}); "
+        "$img.Dispose(); "
+        f"$bmp.Save('{src}', [System.Drawing.Imaging.ImageFormat]::{fmt}); "
+        "$g.Dispose(); $bmp.Dispose()"
+    )
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-Command", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def resize_image_to_size(path: Path, width: int, height: int) -> None:
     Image = _try_pillow()
     if Image is not None:
@@ -1299,21 +1420,27 @@ def resize_image_to_size(path: Path, width: int, height: int) -> None:
                 resized.save(path, **params)
             return
         except Exception as exc:
-            fail(f"failed to resize generated image {path} via Pillow: {exc}")
+            log(f"Pillow resize failed for {path}: {exc}; trying fallbacks")
 
-    if shutil.which("sips") is None:
-        fail(
-            f"generated image {path} does not match requested size and neither Pillow nor "
-            "local sips is available for post-processing. Install pillow: pip install pillow"
+    if shutil.which("sips") is not None:
+        result = subprocess.run(
+            ["sips", "-z", str(height), str(width), str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
         )
-    result = subprocess.run(
-        ["sips", "-z", str(height), str(width), str(path)],
-        check=False,
-        capture_output=True,
-        text=True,
+        if result.returncode == 0:
+            return
+        log(f"sips resize failed for {path}: {result.stderr.strip() or result.stdout.strip()}")
+
+    if _resize_via_powershell(path, width, height):
+        return
+
+    fail(
+        f"generated image {path} does not match requested size and no resize backend is "
+        "available. Install Pillow (pip install pillow) into the Python interpreter that "
+        "runs codex-image, or run on macOS (sips) / Windows with PowerShell."
     )
-    if result.returncode != 0:
-        fail(f"failed to resize generated image {path}: {result.stderr.strip() or result.stdout.strip()}")
 
 
 def ensure_output_dimensions(path: Path, expected_size: str | None) -> None:
@@ -2339,8 +2466,9 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     dims = read_image_dimensions(path)
     if dims is None:
         fail(
-            f"could not read dimensions for {path}. Install Pillow "
-            "(pip install pillow) or run on a system with sips available."
+            f"could not read dimensions for {path}. Built-in PNG/JPEG/GIF/WebP/BMP "
+            "header parser did not recognize the format; install Pillow "
+            "(pip install pillow) or run on a system with sips."
         )
     width, height = dims
     rec_w, rec_h = recommend_api_size_for_input(width, height)
