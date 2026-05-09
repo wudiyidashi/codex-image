@@ -58,6 +58,8 @@ Local saved-file raster image workflow backed by `scripts/codex_image.py`, shell
 - `edit` does not implicitly inherit prior thread state. Reuse requires explicit `--image-set active` or explicit image references.
 - Harmless placeholder variants such as `[Image#1]` and `[image # 1]` are normalized automatically.
 - If `generate` is called with `--image`, the CLI emits a warning and reroutes it to `edit`.
+- For `edit`, list invariants explicitly in the prompt (`change only X; keep Y unchanged`) and repeat them on every iteration. Do not rely on implicit memory across calls.
+- Iterate one change at a time. After each call, re-validate the result, then ship the next single change in a new call. Bundling multiple unrelated changes in one prompt makes drift hard to localize.
 
 ## Output rules
 
@@ -67,9 +69,20 @@ Local saved-file raster image workflow backed by `scripts/codex_image.py`, shell
 - Use `--out` for an exact final path.
 - Use `--out-dir` for batch or multi-output jobs.
 - Use `--name` for a readable prefix with an automatic random suffix.
-- For project-bound assets, save or move the final image into the workspace before finishing.
-- Keep edits non-destructive by default unless the user explicitly asked to overwrite.
 - Successful `responses` calls record the latest response ids under the thread output directory for follow-up reuse.
+
+### Save-path precedence
+
+Apply top-down, taking the first match:
+
+1. The user named a destination (file path, directory, or workspace location). Move or copy the selected output there.
+2. The asset is meant to be consumed by the current project (the request mentions a repo file, component, or page). Move or copy the final image into the workspace before finishing. Never leave a project-referenced asset only at the default `${CODEX_HOME}/generated_images/...` path.
+3. The asset is preview-only or for brainstorming. Render inline; the underlying file may stay at the default path.
+
+### Naming and overwrite
+
+- Default to non-destructive saves. Do not overwrite an existing file unless the user explicitly asked to replace or overwrite it.
+- When a target name is taken, write a sibling versioned name such as `hero.png` -> `hero-v2.png`, `item-icon.png` -> `item-icon-edited.png`.
 
 ## Transparent image requests
 
