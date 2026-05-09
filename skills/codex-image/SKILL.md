@@ -112,6 +112,21 @@ Do not use #00ff00 anywhere in the subject.
 No cast shadow, no contact shadow, no reflection, no watermark, and no text unless explicitly requested.
 ```
 
+## Decision tree
+
+Treat each request as two independent questions:
+
+1. **Intent: generate or edit?**
+   - User provides image inputs only as references for style, composition, mood, or subject guidance: `generate`.
+   - User wants to keep parts of an existing image and modify the rest: `edit`.
+   - No image inputs at all: `generate`.
+2. **Execution strategy: single asset, multi asset, or multi variant?**
+   - Multiple distinct assets: issue one `generate` / `edit` call per asset, or one `generate-batch` job. Do not use `n` to substitute for distinct prompts.
+   - Multiple variants of the *same* prompt: use `n`.
+   - The bare word "batch" does not by itself mean `generate-batch`. Reserve that subcommand for explicit batch workflows (JSONL inputs, multi-prompt files, or the user explicitly asking for batch CLI control).
+
+Default to `generate` unless the request clearly asks to change an existing image.
+
 ## Workflow
 
 1. Decide `generate`, `edit`, or `generate-batch`.
@@ -131,9 +146,25 @@ No cast shadow, no contact shadow, no reflection, no watermark, and no text unle
 
 ## Size and post-processing policy
 
-- Pass explicit non-standard sizes such as `1000x1800` to the API unchanged.
+- Pass explicit non-standard sizes such as `1024x1792` to the API unchanged, but only if they satisfy the model's hard constraints. The CLI rejects invalid `WIDTHxHEIGHT` locally with the same rule descriptions the API would return.
 - If the returned image has the same aspect ratio but different pixels, resize locally to the requested final size.
 - If the returned aspect ratio differs materially, stop instead of stretching automatically.
+
+### gpt-image-2 size constraints (hard-rejected locally before the API call)
+
+- Maximum edge length must be `<= 3840px`.
+- Both edges must be multiples of `16px`.
+- Long edge to short edge ratio must not exceed `3:1`.
+- Total pixels must be at least `655,360` and no more than `8,294,400`.
+
+Recommended sizes (pick from these whenever possible to avoid rejection):
+
+- `1024x1024` — fast square draft
+- `1536x1024` / `1024x1536` — landscape / portrait
+- `2048x2048` — 2K square
+- `2048x1152` — 2K landscape
+- `3840x2160` / `2160x3840` — 4K landscape / portrait
+- `auto`
 
 ## Prompt guidance
 
